@@ -45,18 +45,39 @@ for m in web/boot-manifest.json web/world-manifest.json; do if [ -f "$m" ]; then
 # client is CPU-bound on its one wasm thread, so this is a speed pass, not a size pass —
 # measured +6 % frame rate in-world (docs: wenilla perf notes, 2026-08-29). The feature flags
 # match what rustc emitted; without them wasm-opt refuses the module. Skipped when absent.
-WASM_OPT="${WASM_OPT:-$(pwd)/tools/binaryen/bin/wasm-opt}"
-command -v "${WASM_OPT}" >/dev/null || WASM_OPT="$(command -v wasm-opt || true)"
+# CHG_TH: Supports Linux/macOS binaries and Windows .exe (Git Bash/MSYS2).
+# Prefer WASM_OPT override, then bundled Binaryen, then system PATH.
+BINARYEN_DIR="${BINARYEN_DIR:-tools/binaryen}"
+WASM_OPT="${WASM_OPT:-}"
+if [ -z "${WASM_OPT}" ]; then
+  for candidate in \
+    "${BINARYEN_DIR}/bin/wasm-opt" \
+    "${BINARYEN_DIR}/bin/wasm-opt.exe"; do
+    if [ -x "${candidate}" ]; then
+      WASM_OPT="${candidate}"
+      break
+    fi
+  done
+fi
+if [ -z "${WASM_OPT}" ]; then
+  WASM_OPT="$(command -v wasm-opt 2>/dev/null || command -v wasm-opt.exe 2>/dev/null || true)"
+fi
 # WEB_DEBUG keeps the names through the pass (-g), so a profile reads the shipping code.
 keep=()
 [ "${WEB_DEBUG:-0}" = 1 ] && keep=(-g)
-if [ -n "${WASM_OPT}" ]; then
-  "${WASM_OPT}" -O3 ${keep[@]+"${keep[@]}"} --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
+if [ -n "${WASM_OPT}" ] && ! command -v "${WASM_OPT}" >/dev/null 2>&1; then
+  echo "ERROR: Configured wasm-opt not executable: ${WASM_OPT}" >&2
+  exit 1
+fi
+if [ -n "${WASM_OPT}" ] && command -v "${WASM_OPT}" >/dev/null 2>&1; then
+  echo "== wasm-opt -O3 ($("${WASM_OPT}" --version))"
+  "${WASM_OPT}" -O3 "${keep[@]}" \
+    --enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext \
     --enable-mutable-globals --enable-reference-types --enable-multivalue \
     "${DIST}/wenilla_bg.wasm" -o "${DIST}/wenilla_bg.wasm.opt"
   mv "${DIST}/wenilla_bg.wasm.opt" "${DIST}/wenilla_bg.wasm"
 else
-  echo "wasm-opt not found (scripts/web-setup.sh fetches binaryen) — shipping the unoptimised module"
+  echo "wasm-opt not found — shipping the unoptimised module"
 fi
 
 # Precompressed siblings for wenilla-host's precompressed_br()/gzip(): ~90 MB of wasm goes
